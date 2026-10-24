@@ -1,0 +1,62 @@
+name: Quest APK
+
+# Builds the Quest APK on a Windows runner. The Time Crisis ROM is needed at
+# build time (it is translated to C), so it is downloaded from the URL stored in
+# the ROM_URL repository secret. The ROM is never committed or uploaded.
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_roms:
+        description: "Bundle the ROM inside the APK (the artifact is downloadable by any signed-in GitHub user on a public repo; leave off)"
+        type: boolean
+        default: false
+  push:
+    branches: ["claude/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download ROM
+        shell: bash
+        env:
+          ROM_URL: ${{ secrets.ROM_URL }}
+          ROM_AUTH_HEADER: ${{ secrets.ROM_AUTH_HEADER }}
+        run: |
+          if [ -z "$ROM_URL" ]; then echo "::error::Repository secret ROM_URL is not set"; exit 1; fi
+          args=(-fsSL --retry 3 -o "$RUNNER_TEMP/timecris.zip")
+          if [ -n "$ROM_AUTH_HEADER" ]; then args+=(-H "$ROM_AUTH_HEADER"); fi
+          curl "${args[@]}" "$ROM_URL"
+          python -c "import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); print(len(z.namelist()),'files in ROM zip')" "$RUNNER_TEMP/timecris.zip"
+
+      - name: Build APK
+        shell: bash
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+        run: |
+          extra=""
+          if [ "${{ inputs.bundle_roms }}" = "true" ]; then extra="--bundle-roms"; fi
+          python tools/build.py --rom "$RUNNER_TEMP/timecris.zip" --jobs 4 $extra
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TimeCrisisVR-quest-apk
+          path: |
+            artifacts/*.apk
+            artifacts/bundled/*.apk
+            artifacts/build-info.json
+            artifacts/bundled/build-info.json
+          if-no-files-found: error
+          retention-days: 14
